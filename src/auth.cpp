@@ -36,10 +36,14 @@ extern "C" {
 #include "screen.hpp"
 #include "logger.hpp"
 #include "auth.hpp"
+#include "config.h"
 
 #define MAX_HEADER_LEN  2049
 #define MD5_HASH_SIZE 16
 #define HASH_HEX_SIZE 2*MD5_HASH_SIZE
+
+#define SHA256_HASH_SIZE 32
+#define SHA256_HASH_HEX_SIZE 2*SHA256_HASH_SIZE
 
 extern char               *auth_uri;
 
@@ -104,13 +108,13 @@ int createAuthHeaderAKAv1MD5(const char *user,
 
 /* This function is from RFC 2617 Section 5 */
 
-static void hashToHex(md5_byte_t* _b_raw, unsigned char* _h)
+static void hashToHex(md5_byte_t* _b_raw, unsigned char* _h, int hashSize)
 {
     unsigned short i;
     unsigned char j;
     unsigned char *_b = (unsigned char *) _b_raw;
 
-    for (i = 0; i < MD5_HASH_SIZE; i++) {
+    for (i = 0; i < hashSize; i++) {
         j = (_b[i] >> 4) & 0xf;
         if (j <= 9) {
             _h[i * 2] = (j + '0');
@@ -124,7 +128,7 @@ static void hashToHex(md5_byte_t* _b_raw, unsigned char* _h)
             _h[i * 2 + 1] = (j + 'a' - 10);
         }
     };
-    _h[HASH_HEX_SIZE] = '\0';
+    _h[2 * hashSize] = '\0';
 }
 
 static char *stristr(const char* s1, const char* s2)
@@ -191,6 +195,11 @@ int createAuthHeader(const char *user, const char *password, const char *method,
         }
         return createAuthHeaderAKAv1MD5(user, aka_OP, aka_AMF, aka_K, method,
                                         uri, msgbody, auth, algo, result);
+#ifdef HAVE_OPENSSL_SHA_H
+    } else if (strncasecmp(algo, "SHA256", 6)==0 || strncasecmp(algo, "SHA-256", 7)==0) {
+        return createAuthHeaderMD5(user, password, strlen(password), method,
+                uri, msgbody, auth, algo, result);
+#endif
     } else {
         sprintf(result, "createAuthHeader: authentication must use MD5 or AKAv1-MD5");
         return 0;
@@ -273,7 +282,7 @@ static int createAuthResponseMD5(const char* user,
     md5_append(&Md5Ctx, (md5_byte_t *) ":", 1);
     md5_append(&Md5Ctx, (md5_byte_t *) password, password_len);
     md5_finish(&Md5Ctx, ha1);
-    hashToHex(&ha1[0], &ha1_hex[0]);
+    hashToHex(&ha1[0], &ha1_hex[0], MD5_HASH_SIZE);
 
     if (auth_uri) {
         sprintf(tmp, "sip:%s", auth_uri);
@@ -285,7 +294,7 @@ static int createAuthResponseMD5(const char* user,
         md5_init(&Md5Ctx);
         md5_append(&Md5Ctx, (md5_byte_t *) msgbody, strlen(msgbody));
         md5_finish(&Md5Ctx, body);
-        hashToHex(&body[0], &body_hex[0]);
+        hashToHex(&body[0], &body_hex[0], MD5_HASH_SIZE);
     }
 
     // Load in A2
@@ -298,7 +307,7 @@ static int createAuthResponseMD5(const char* user,
         md5_append(&Md5Ctx, (md5_byte_t *) &body_hex, HASH_HEX_SIZE);
     }
     md5_finish(&Md5Ctx, ha2);
-    hashToHex(&ha2[0], &ha2_hex[0]);
+    hashToHex(&ha2[0], &ha2_hex[0], MD5_HASH_SIZE);
 
     md5_init(&Md5Ctx);
     md5_append(&Md5Ctx, (md5_byte_t *) &ha1_hex, HASH_HEX_SIZE);
@@ -315,10 +324,87 @@ static int createAuthResponseMD5(const char* user,
     md5_append(&Md5Ctx, (md5_byte_t *) ":", 1);
     md5_append(&Md5Ctx, (md5_byte_t *) &ha2_hex, HASH_HEX_SIZE);
     md5_finish(&Md5Ctx, resp);
-    hashToHex(&resp[0], result);
+    hashToHex(&resp[0], result, MD5_HASH_SIZE);
 
     return 1;
 }
+
+#ifdef HAVE_OPENSSL_SHA_H
+static int createAuthResponseSHA256(const char* user,
+                                 const char* password,
+                                 int password_len,
+                                 const char* method,
+                                 const char* uri,
+                                 const char* authtype,
+                                 const char* msgbody,
+                                 const char* realm,
+                                 const char* nonce,
+                                 const char* cnonce,
+                                 const char* nc,
+                                 unsigned char* result)
+{
+    md5_byte_t ha1[SHA256_HASH_SIZE], ha2[SHA256_HASH_SIZE];
+    md5_byte_t resp[SHA256_HASH_SIZE], body[SHA256_HASH_SIZE];
+    unsigned char body_hex[SHA256_HASH_HEX_SIZE+1];
+    unsigned char ha1_hex[SHA256_HASH_HEX_SIZE+1], ha2_hex[SHA256_HASH_HEX_SIZE+1];
+    char tmp[MAX_HEADER_LEN];
+    SHA256_CTX Sha256Ctx;
+
+    // Load in A1
+	SHA256_Init(&Sha256Ctx);
+	SHA256_Update(&Sha256Ctx, (md5_byte_t *) user, strlen(user));
+	SHA256_Update(&Sha256Ctx, (md5_byte_t *) ":", 1);
+	SHA256_Update(&Sha256Ctx, (md5_byte_t *) realm, strlen(realm));
+	SHA256_Update(&Sha256Ctx, (md5_byte_t *) ":", 1);
+	SHA256_Update(&Sha256Ctx, (md5_byte_t *) password, password_len);
+	SHA256_Final((md5_byte_t *)ha1, &Sha256Ctx);
+    hashToHex(&ha1[0], &ha1_hex[0], SHA256_HASH_SIZE);
+
+    if (auth_uri) {
+        sprintf(tmp, "sip:%s", auth_uri);
+    } else {
+        strncpy(tmp, uri, sizeof(tmp) - 1);
+    }
+    // If using Auth-Int make a hash of the body - which is NULL for REG
+    if (stristr(authtype, "auth-int") != NULL) {
+    	SHA256_Init(&Sha256Ctx);
+    	SHA256_Update(&Sha256Ctx, (md5_byte_t *) msgbody, strlen(msgbody));
+    	SHA256_Final((md5_byte_t *)body, &Sha256Ctx);
+        hashToHex(&body[0], &body_hex[0], SHA256_HASH_SIZE);
+    }
+
+    // Load in A2
+    SHA256_Init(&Sha256Ctx);
+    SHA256_Update(&Sha256Ctx, (md5_byte_t *) method, strlen(method));
+    SHA256_Update(&Sha256Ctx, (md5_byte_t *) ":", 1);
+    SHA256_Update(&Sha256Ctx, (md5_byte_t *) tmp, strlen(tmp));
+    if (stristr(authtype, "auth-int") != NULL) {
+    	SHA256_Update(&Sha256Ctx, (md5_byte_t *) ":", 1);
+    	SHA256_Update(&Sha256Ctx, (md5_byte_t *) &body_hex, SHA256_HASH_HEX_SIZE);
+    }
+    SHA256_Final((md5_byte_t *)ha2, &Sha256Ctx);
+    hashToHex(&ha2[0], &ha2_hex[0], SHA256_HASH_SIZE);
+
+    SHA256_Init(&Sha256Ctx);
+    SHA256_Update(&Sha256Ctx, (md5_byte_t *) &ha1_hex, SHA256_HASH_HEX_SIZE);
+    SHA256_Update(&Sha256Ctx, (md5_byte_t *) ":", 1);
+    SHA256_Update(&Sha256Ctx, (md5_byte_t *) nonce, strlen(nonce));
+    if (cnonce[0] != '\0') {
+    	SHA256_Update(&Sha256Ctx, (md5_byte_t *) ":", 1);
+    	SHA256_Update(&Sha256Ctx, (md5_byte_t *) nc, strlen(nc));
+    	SHA256_Update(&Sha256Ctx, (md5_byte_t *) ":", 1);
+    	SHA256_Update(&Sha256Ctx, (md5_byte_t *) cnonce, strlen(cnonce));
+    	SHA256_Update(&Sha256Ctx, (md5_byte_t *) ":", 1);
+    	SHA256_Update(&Sha256Ctx, (md5_byte_t *) authtype, strlen(authtype));
+    }
+    SHA256_Update(&Sha256Ctx, (md5_byte_t *) ":", 1);
+    SHA256_Update(&Sha256Ctx, (md5_byte_t *) &ha2_hex, SHA256_HASH_HEX_SIZE);
+    SHA256_Final((md5_byte_t *)resp, &Sha256Ctx);
+    hashToHex(&resp[0], result, SHA256_HASH_SIZE);
+
+    return 1;
+}
+#endif
 
 int createAuthHeaderMD5(const char *user,
                         const char *password,
@@ -402,18 +488,38 @@ int createAuthHeaderMD5(const char *user,
         return 0;
     }
 
-    createAuthResponseMD5(user,
-                          password,
-                          strlen(password),
-                          method,
-                          sipuri,
-                          authtype,
-                          msgbody,
-                          realm,
-                          nonce,
-                          cnonce,
-                          nc,
-                          &resp_hex[0]);
+#ifdef HAVE_OPENSSL_SHA_H
+    if (algo[0] == 'S' || algo[0] == 's') { // SHA-256 instead of MD5
+    	createAuthResponseSHA256(user,
+                              password,
+                              strlen(password),
+                              method,
+                              sipuri,
+                              authtype,
+                              msgbody,
+                              realm,
+                              nonce,
+                              cnonce,
+                              nc,
+                              &resp_hex[0]);
+    }
+    else {
+#endif
+        createAuthResponseMD5(user,
+                              password,
+                              strlen(password),
+                              method,
+                              sipuri,
+                              authtype,
+                              msgbody,
+                              realm,
+                              nonce,
+                              cnonce,
+                              nc,
+                              &resp_hex[0]);
+#ifdef HAVE_OPENSSL_SHA_H
+        }
+#endif
 
     snprintf(tmp2, sizeof(tmp2), ",nonce=\"%s\",response=\"%s\",algorithm=%s", nonce, resp_hex, algo);
     strcat(result, tmp2);
@@ -448,25 +554,49 @@ int verifyAuthHeader(const char *user, const char *password, const char *method,
     if (algo[0] == '\0') {
         strcpy(algo, "MD5");
     }
-    if (strncasecmp(algo, "MD5", 3)==0) {
+    if (strncasecmp(algo, "MD5", 3)==0
+#ifdef HAVE_OPENSSL_SHA_H
+    		|| strncasecmp(algo, "SHA", 3)
+#endif
+    ) {
         getAuthParameter("realm", auth, realm, sizeof(realm));
         getAuthParameter("uri", auth, uri, sizeof(uri));
         getAuthParameter("nonce", auth, nonce, sizeof(nonce));
         getAuthParameter("cnonce", auth, cnonce, sizeof(cnonce));
         getAuthParameter("nc", auth, nc, sizeof(nc));
         getAuthParameter("qop", auth, authtype, sizeof(authtype));
-        createAuthResponseMD5(user,
-                              password,
-                              strlen(password),
-                              method,
-                              uri,
-                              authtype,
-                              msgbody,
-                              realm,
-                              nonce,
-                              cnonce,
-                              nc,
-                              result);
+#ifdef HAVE_OPENSSL_SHA_H
+		if (algo[0] == 'S' || algo[0] == 's') { // SHA-256 instead of MD5
+			createAuthResponseSHA256(user,
+								  password,
+								  strlen(password),
+								  method,
+								  uri,
+								  authtype,
+								  msgbody,
+								  realm,
+								  nonce,
+								  cnonce,
+								  nc,
+								  result);
+		}
+		else {
+#endif
+			createAuthResponseMD5(user,
+								  password,
+								  strlen(password),
+								  method,
+								  uri,
+								  authtype,
+								  msgbody,
+								  realm,
+								  nonce,
+								  cnonce,
+								  nc,
+								  result);
+#ifdef HAVE_OPENSSL_SHA_H
+        }
+#endif
         getAuthParameter("response", auth, response, sizeof(response));
         TRACE_CALLDEBUG("Processing verifyauth command - user %s, password %s, method %s, uri %s, realm %s, nonce %s, result expected %s, response from user %s\n",
                 user,

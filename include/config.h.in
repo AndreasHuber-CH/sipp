@@ -112,8 +112,14 @@
 /* Define to 1 if you have the <openssl/err.h> header file. */
 #undef HAVE_OPENSSL_ERR_H
 
+/* Define to 1 if you have the <openssl/md5.h> header file. */
+#undef HAVE_OPENSSL_MD5_H
+
 /* Define to 1 if you have the <openssl/rand.h> header file. */
 #undef HAVE_OPENSSL_RAND_H
+
+/* Define to 1 if you have the <openssl/sha.h> header file. */
+#undef HAVE_OPENSSL_SHA_H
 
 /* Define to 1 if you have the <openssl/ssl.h> header file. */
 #undef HAVE_OPENSSL_SSL_H
