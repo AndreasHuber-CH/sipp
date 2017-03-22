@@ -38,6 +38,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include "sipp.hpp"
 #include "socket.hpp"
 #include "logger.hpp"
@@ -2149,31 +2150,39 @@ ssl_init_status FI_init_ssl_context (void)
     SSL_CTX_set_default_passwd_cb( sip_trp_ssl_ctx_client,
                                    passwd_call_back_routine );
 
-    if ( SSL_CTX_use_certificate_file(sip_trp_ssl_ctx,
-                                      tls_cert_name,
-                                      SSL_FILETYPE_PEM ) != 1 ) {
-        ERROR("FI_init_ssl_context: SSL_CTX_use_certificate_file failed");
-        return SSL_INIT_ERROR;
+    struct stat buffer;
+    // load default cert file only if it exists
+    if (strcmp(DEFAULT_TLS_CERT, tls_cert_name) == 0 && stat(tls_cert_name, &buffer) == 0) {
+        if ( SSL_CTX_use_certificate_file(sip_trp_ssl_ctx,
+                                          tls_cert_name,
+                                          SSL_FILETYPE_PEM ) != 1 ) {
+            ERROR("FI_init_ssl_context: SSL_CTX_use_certificate_file failed");
+            return SSL_INIT_ERROR;
+        }
+
+        if ( SSL_CTX_use_certificate_file(sip_trp_ssl_ctx_client,
+                                          tls_cert_name,
+                                          SSL_FILETYPE_PEM ) != 1 ) {
+            ERROR("FI_init_ssl_context: SSL_CTX_use_certificate_file (client) failed");
+            return SSL_INIT_ERROR;
+        }
     }
 
-    if ( SSL_CTX_use_certificate_file(sip_trp_ssl_ctx_client,
-                                      tls_cert_name,
-                                      SSL_FILETYPE_PEM ) != 1 ) {
-        ERROR("FI_init_ssl_context: SSL_CTX_use_certificate_file (client) failed");
-        return SSL_INIT_ERROR;
-    }
-    if ( SSL_CTX_use_PrivateKey_file(sip_trp_ssl_ctx,
-                                     tls_key_name,
-                                     SSL_FILETYPE_PEM ) != 1 ) {
-        ERROR("FI_init_ssl_context: SSL_CTX_use_PrivateKey_file failed");
-        return SSL_INIT_ERROR;
-    }
+    // load default key file only if it exists
+    if (strcmp(DEFAULT_TLS_KEY, tls_key_name) == 0 && stat(tls_key_name, &buffer) == 0) {
+        if ( SSL_CTX_use_PrivateKey_file(sip_trp_ssl_ctx,
+                                         tls_key_name,
+                                         SSL_FILETYPE_PEM ) != 1 ) {
+            ERROR("FI_init_ssl_context: SSL_CTX_use_PrivateKey_file failed");
+            return SSL_INIT_ERROR;
+        }
 
-    if ( SSL_CTX_use_PrivateKey_file(sip_trp_ssl_ctx_client,
-                                     tls_key_name,
-                                     SSL_FILETYPE_PEM ) != 1 ) {
-        ERROR("FI_init_ssl_context: SSL_CTX_use_PrivateKey_file (client) failed");
-        return SSL_INIT_ERROR;
+        if ( SSL_CTX_use_PrivateKey_file(sip_trp_ssl_ctx_client,
+                                         tls_key_name,
+                                         SSL_FILETYPE_PEM ) != 1 ) {
+            ERROR("FI_init_ssl_context: SSL_CTX_use_PrivateKey_file (client) failed");
+            return SSL_INIT_ERROR;
+        }
     }
 
     return SSL_INIT_NORMAL;
